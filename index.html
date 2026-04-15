@@ -131,30 +131,99 @@ async function fetchData() {
   const r = await fetch("https://api.jsonbin.io/v3/b/" + BIN_ID + "/latest", {
     headers: { "X-Master-Key": API_KEY }
   });
-  if (!r.ok) { const t = await r.text(); throw new Error(r.status + " — " + t.slice(0,120)); }
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(r.status + " — " + t.slice(0, 120));
+  }
   const json = await r.json();
-  return json.record;
+  // Garantir une structure valide même si le bin est vide ou corrompu
+  const record = json.record || {};
+  return {
+    count: typeof record.count === "number" ? record.count : 0,
+    history: Array.isArray(record.history) ? record.history : []
+  };
 }
-
+ 
 async function saveData(data) {
+  // Toujours sauvegarder une structure propre
+  const clean = {
+    count: typeof data.count === "number" ? data.count : 0,
+    history: Array.isArray(data.history) ? data.history : []
+  };
   const r = await fetch("https://api.jsonbin.io/v3/b/" + BIN_ID, {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "X-Master-Key": API_KEY },
-    body: JSON.stringify(data)
+    headers: {
+      "Content-Type": "application/json",
+      "X-Master-Key": API_KEY
+    },
+    body: JSON.stringify(clean)
   });
-  if (!r.ok) { const t = await r.text(); throw new Error(r.status + " — " + t.slice(0,120)); }
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error(r.status + " — " + t.slice(0, 120));
+  }
+  // Retourner les données confirmées par JSONbin
+  const json = await r.json();
+  return json.record || clean;
 }
-
+ 
 async function incrementAndSave(source) {
-  const data    = await fetchData();
-  const count   = (data.count || 0) + 1;
-  const date    = new Date().toLocaleDateString("fr-FR", {
-    day:"2-digit", month:"2-digit", year:"numeric",
-    hour:"2-digit", minute:"2-digit"
+  const data = await fetchData();
+  const count = data.count + 1;
+  const date = new Date().toLocaleDateString("fr-FR", {
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit"
   });
-  const history = [{date, source, id:Date.now()}, ...(data.history||[])].slice(0, 50);
-  await saveData({count, history});
-  return {count, history};
+  const history = [
+    { date, source, id: Date.now() },
+    ...data.history
+  ].slice(0, 50);
+ 
+  const saved = await saveData({ count, history });
+  return { count: saved.count, history: saved.history };
+}
+ 
+// ══════════════════════════════════════════════════════
+// DASHBOARD — ACTIONS CORRIGÉES
+// ══════════════════════════════════════════════════════
+ 
+async function loadRemote() {
+  try {
+    setStatus("⟳ Chargement…", "syncing");
+    const data = await fetchData();
+    renderCounter(data.count);
+    renderHistory(data.history);
+    setStatus("✓ Synchronisé — " + new Date().toLocaleTimeString("fr-FR"), "synced");
+  } catch (e) {
+    setStatus("✗ " + e.message, "error");
+  }
+}
+ 
+async function handleOpen() {
+  try {
+    setStatus("⟳ Enregistrement…", "syncing");
+    const { count, history } = await incrementAndSave("pc");
+    renderCounter(count);
+    renderHistory(history);
+    setStatus("✓ Scan enregistré — " + new Date().toLocaleTimeString("fr-FR"), "synced");
+  } catch (e) {
+    setStatus("✗ " + e.message, "error");
+  }
+  window.open(TARGET_URL, "_blank");
+}
+ 
+async function handleReset() {
+  if (!confirm("Remettre le compteur à zéro ?")) return;
+  try {
+    setStatus("⟳ Remise à zéro…", "syncing");
+    // Sauvegarder une structure propre et attendre la confirmation
+    const saved = await saveData({ count: 0, history: [] });
+    renderCounter(saved.count);
+    renderHistory(saved.history);
+    setStatus("✓ Remis à zéro", "synced");
+  } catch (e) {
+    setStatus("✗ Erreur reset : " + e.message, "error");
+  }
 }
 
 // ══════════════════════════════════════════════════════
